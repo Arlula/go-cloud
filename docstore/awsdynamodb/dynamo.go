@@ -64,7 +64,7 @@ type collection struct {
 	table        string // DynamoDB table name
 	partitionKey string
 	sortKey      string
-	description  *dyn.TableDescription
+	description  *tableDescription
 	opts         *Options
 }
 
@@ -125,24 +125,36 @@ func OpenCollection(db *dyn.DynamoDB, tableName, partitionKey, sortKey string, o
 }
 
 func newCollection(db *dyn.DynamoDB, tableName, partitionKey, sortKey string, opts *Options) (*collection, error) {
-	out, err := db.DescribeTable(&dyn.DescribeTableInput{TableName: &tableName})
+	desc, err := getTableDescription(db, tableName)
 	if err != nil {
 		return nil, err
 	}
+
 	if opts == nil {
 		opts = &Options{}
 	}
 	if opts.RevisionField == "" {
 		opts.RevisionField = docstore.DefaultRevisionField
 	}
+
 	return &collection{
 		db:           db,
 		table:        tableName,
 		partitionKey: partitionKey,
 		sortKey:      sortKey,
-		description:  out.Table,
+		description:  desc,
 		opts:         opts,
 	}, nil
+}
+
+func getTableDescription(db *dyn.DynamoDB, tableName string) (*tableDescription, error) {
+	out, err := db.DescribeTable(&dyn.DescribeTableInput{TableName: &tableName})
+	if err != nil {
+		return nil, err
+	}
+	desc := tableDescriptionFromV1Output(out)
+
+	return desc, nil
 }
 
 // Key returns a two-element array with the partition key and sort key, if any.
