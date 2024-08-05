@@ -774,6 +774,13 @@ func revisionPrecondition(doc driver.Document, revField string) (*expression.Con
 
 // TODO(jba): use this if/when we support atomic writes.
 func (c *collection) transactWrite(ctx context.Context, actions []*driver.Action, errs []error, opts *driver.RunActionsOptions, start, end int) {
+	if c.useV2 {
+		c.transactWriteV2(ctx, actions, errs, opts, start, end)
+	} else {
+		c.transactWriteV1(ctx, actions, errs, opts, start, end)
+	}
+}
+func (c *collection) transactWriteV1(ctx context.Context, actions []*driver.Action, errs []error, opts *driver.RunActionsOptions, start, end int) {
 	setErr := func(err error) {
 		for i := start; i <= end; i++ {
 			errs[actions[i].Index] = err
@@ -813,6 +820,54 @@ func (c *collection) transactWrite(ctx context.Context, actions []*driver.Action
 		}
 	}
 	if _, err := c.db.TransactWriteItemsWithContext(ctx, in); err != nil {
+		setErr(err)
+		return
+	}
+	for _, op := range ops {
+		errs[op.action.Index] = c.onSuccess(op)
+	}
+}
+
+func (c *collection) transactWriteV2(ctx context.Context, actions []*driver.Action, errs []error, opts *driver.RunActionsOptions, start, end int) {
+	setErr := func(err error) {
+		for i := start; i <= end; i++ {
+			errs[actions[i].Index] = err
+		}
+	}
+
+	var ops []*writeOp
+	tws := make([]dyn2Types.TransactWriteItem, 0, end-start+1)
+	for i := start; i <= end; i++ {
+		a := actions[i]
+		op, err := c.newWriteOp(a, opts)
+		if err != nil {
+			setErr(err)
+			return
+		}
+		ops = append(ops, op)
+		tws = append(tws, op.writeItem)
+	}
+
+	in := &dyn2.TransactWriteItemsInput{
+		ClientRequestToken: aws.String(driver.UniqueString()),
+		TransactItems:      tws,
+	}
+
+	if opts.BeforeDo != nil {
+		asFunc := func(i interface{}) bool {
+			p, ok := i.(**dyn2.TransactWriteItemsInput)
+			if !ok {
+				return false
+			}
+			*p = in
+			return true
+		}
+		if err := opts.BeforeDo(asFunc); err != nil {
+			setErr(err)
+			return
+		}
+	}
+	if _, err := c.dbV2.TransactWriteItems(ctx, in); err != nil {
 		setErr(err)
 		return
 	}
