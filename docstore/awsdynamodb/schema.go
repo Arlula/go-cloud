@@ -5,27 +5,33 @@ import (
 	dyn "github.com/aws/aws-sdk-go/service/dynamodb"
 )
 
+// tableDescription wraps the required fields of a dynamo DescribeTable response needed for this library
 type tableDescription struct {
 	LocalSecondaryIndexes  []tableIndex
 	GlobalSecondaryIndexes []tableIndex
 }
 
+// tableIndex describes a local or global secondary index on a table description
+// detailing it's key details for requests; its name, field schema and data projection.
 type tableIndex struct {
 	IndexName  string
 	KeySchema  []keySchemaElement
 	Projection projection
 }
 
+// keySchemaElement is a key-value record representing the AWS structure used for their storage
 type keySchemaElement struct {
 	AttributeName string
 	KeyType       string
 }
 
+// projection represents the projection rules for a given index and how those attributes will be projected (copied) into the result
 type projection struct {
 	NonKeyAttributes []string
 	ProjectionType   string
 }
 
+// tableDescriptionFromV1Output takes the V1 DescribeTable Output and maps it to the internal tableDescription type
 func tableDescriptionFromV1Output(out *dyn.DescribeTableOutput) *tableDescription {
 	desc := &tableDescription{
 		LocalSecondaryIndexes:  make([]tableIndex, len(out.Table.LocalSecondaryIndexes)),
@@ -77,6 +83,7 @@ func tableDescriptionFromV1Output(out *dyn.DescribeTableOutput) *tableDescriptio
 	return desc
 }
 
+// tableDescriptionFromV2Output takes the V2 DescribeTable Output and maps it to the internal tableDescription type
 func tableDescriptionFromV2Output(out *dyn2.DescribeTableOutput) *tableDescription {
 	desc := &tableDescription{
 		LocalSecondaryIndexes:  make([]tableIndex, len(out.Table.LocalSecondaryIndexes)),
