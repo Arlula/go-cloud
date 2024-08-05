@@ -90,19 +90,19 @@ func (h *harness) Close() {
 func (h *harness) MakeCollection(_ context.Context, kind drivertest.CollectionKind) (driver.Collection, error) {
 	switch kind {
 	case drivertest.SingleKey, drivertest.NoRev:
-		return newCollection(dyn.New(h.sess), collectionName1, drivertest.KeyField, "", &Options{
+		return newCollection(dyn.New(h.sess), nil, collectionName1, drivertest.KeyField, "", &Options{
 			AllowScans:     true,
 			ConsistentRead: true,
 		})
 	case drivertest.TwoKey:
 		// For query test we don't use strong consistency mode since some tests are
 		// running on global secondary index and it doesn't support ConsistentRead.
-		return newCollection(dyn.New(h.sess), collectionName2, "Game", "Player", &Options{
+		return newCollection(dyn.New(h.sess), nil, collectionName2, "Game", "Player", &Options{
 			AllowScans:       true,
 			RunQueryFallback: InMemorySortFallback(func() interface{} { return new(drivertest.HighScore) }),
 		})
 	case drivertest.AltRev:
-		return newCollection(dyn.New(h.sess), collectionName1, drivertest.KeyField, "",
+		return newCollection(dyn.New(h.sess), nil, collectionName1, drivertest.KeyField, "",
 			&Options{
 				AllowScans:     true,
 				RevisionField:  drivertest.AlternateRevisionField,
@@ -193,7 +193,7 @@ func BenchmarkConformance(b *testing.B) {
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region: aws.String(region),
 	}))
-	coll, err := newCollection(dyn.New(sess), collectionName3, drivertest.KeyField, "", &Options{AllowScans: true})
+	coll, err := newCollection(dyn.New(sess), nil, collectionName3, drivertest.KeyField, "", &Options{AllowScans: true})
 	if err != nil {
 		b.Fatal(err)
 	}

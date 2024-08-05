@@ -39,10 +39,12 @@ package awsdynamodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 
+	dyn2 "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	dyn "github.com/aws/aws-sdk-go/service/dynamodb"
@@ -61,6 +63,8 @@ var Set = wire.NewSet(
 
 type collection struct {
 	db           *dyn.DynamoDB
+	dbV2         *dyn2.Client
+	useV2        bool
 	table        string // DynamoDB table name
 	partitionKey string
 	sortKey      string
@@ -117,15 +121,42 @@ type RunQueryFunc func(context.Context, *driver.Query) (driver.DocumentIterator,
 
 // OpenCollection creates a *docstore.Collection representing a DynamoDB collection.
 func OpenCollection(db *dyn.DynamoDB, tableName, partitionKey, sortKey string, opts *Options) (*docstore.Collection, error) {
-	c, err := newCollection(db, tableName, partitionKey, sortKey, opts)
+	if db == nil {
+		return nil, errors.New("awsdynamodb.OpenCollection: DynamoDB client is required")
+	}
+	c, err := newCollection(db, nil, tableName, partitionKey, sortKey, opts)
 	if err != nil {
 		return nil, err
 	}
 	return docstore.NewCollection(c), nil
 }
 
-func newCollection(db *dyn.DynamoDB, tableName, partitionKey, sortKey string, opts *Options) (*collection, error) {
-	desc, err := getTableDescription(db, tableName)
+// OpenCollectionV2 creates a *docstore.Collection representing a DynamoDB collection.
+func OpenCollectionV2(db *dyn2.Client, tableName, partitionKey, sortKey string, opts *Options) (*docstore.Collection, error) {
+	if db == nil {
+		return nil, errors.New("awsdynamodb.OpenCollectionV2: DynamoDB client is required")
+	}
+	c, err := newCollection(nil, db, tableName, partitionKey, sortKey, opts)
+	if err != nil {
+		return nil, err
+	}
+	return docstore.NewCollection(c), nil
+}
+
+func newCollection(db *dyn.DynamoDB, dbv2 *dyn2.Client, tableName, partitionKey, sortKey string, opts *Options) (*collection, error) {
+	if db == nil && dbv2 == nil {
+		return nil, errors.New("awsdynamodb.newCollection: a db client is required")
+	}
+
+	var (
+		desc *tableDescription
+		err  error
+	)
+	if dbv2 != nil {
+		desc, err = getTableDescriptionV2(dbv2, tableName)
+	} else {
+		desc, err = getTableDescription(db, tableName)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +170,8 @@ func newCollection(db *dyn.DynamoDB, tableName, partitionKey, sortKey string, op
 
 	return &collection{
 		db:           db,
+		dbV2:         dbv2,
+		useV2:        dbv2 != nil,
 		table:        tableName,
 		partitionKey: partitionKey,
 		sortKey:      sortKey,
@@ -153,6 +186,16 @@ func getTableDescription(db *dyn.DynamoDB, tableName string) (*tableDescription,
 		return nil, err
 	}
 	desc := tableDescriptionFromV1Output(out)
+
+	return desc, nil
+}
+
+func getTableDescriptionV2(db *dyn2.Client, tableName string) (*tableDescription, error) {
+	out, err := db.DescribeTable(context.Background(), &dyn2.DescribeTableInput{TableName: &tableName})
+	if err != nil {
+		return nil, err
+	}
+	desc := tableDescriptionFromV2Output(out)
 
 	return desc, nil
 }
