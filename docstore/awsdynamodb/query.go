@@ -175,7 +175,7 @@ func (c *collection) bestQueryable(q *driver.Query) (indexName *string, pkey, sk
 		for _, li := range c.description.LocalSecondaryIndexes {
 			pkey, skey := keyAttributes(li.KeySchema)
 			if hasFilter(q, skey) && localFieldsIncluded(q, li) && orderingConsistent(q, skey) {
-				return li.IndexName, pkey, skey
+				return &li.IndexName, pkey, skey
 			}
 		}
 	}
@@ -187,7 +187,7 @@ func (c *collection) bestQueryable(q *driver.Query) (indexName *string, pkey, sk
 			continue // We'll visit global indexes without a sort key later.
 		}
 		if hasEqualityFilter(q, pkey) && hasFilter(q, skey) && c.globalFieldsIncluded(q, gi) && orderingConsistent(q, skey) {
-			return gi.IndexName, pkey, skey
+			return &gi.IndexName, pkey, skey
 		}
 	}
 	// There are no matches for both partition and sort key. Now consider matches on partition key only.
@@ -201,7 +201,7 @@ func (c *collection) bestQueryable(q *driver.Query) (indexName *string, pkey, sk
 	for _, gi := range c.description.GlobalSecondaryIndexes {
 		pkey, skey := keyAttributes(gi.KeySchema)
 		if hasEqualityFilter(q, pkey) && c.globalFieldsIncluded(q, gi) && orderingConsistent(q, skey) {
-			return gi.IndexName, pkey, skey
+			return &gi.IndexName, pkey, skey
 		}
 	}
 	// We cannot do a query.
@@ -216,8 +216,8 @@ func (c *collection) bestQueryable(q *driver.Query) (indexName *string, pkey, sk
 // they are not projected into the index, the only case where a local index cannot
 // be used is when the query wants all the fields, and the index projection is not ALL.
 // See https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/LSI.html#LSI.Projections.
-func localFieldsIncluded(q *driver.Query, li *dyn.LocalSecondaryIndexDescription) bool {
-	return len(q.FieldPaths) > 0 || *li.Projection.ProjectionType == "ALL"
+func localFieldsIncluded(q *driver.Query, li tableIndex) bool {
+	return len(q.FieldPaths) > 0 || li.Projection.ProjectionType == "ALL"
 }
 
 // orderingConsistent reports whether the ordering constraint is consistent with the sort key field.
@@ -231,9 +231,9 @@ func orderingConsistent(q *driver.Query, sortField string) bool {
 // check before using the index, because if a global index doesn't have all the
 // desired fields, then a separate RPC for each returned item would be necessary to
 // retrieve those fields, and we'd rather scan than do that.
-func (c *collection) globalFieldsIncluded(q *driver.Query, gi *dyn.GlobalSecondaryIndexDescription) bool {
+func (c *collection) globalFieldsIncluded(q *driver.Query, gi tableIndex) bool {
 	proj := gi.Projection
-	if *proj.ProjectionType == "ALL" {
+	if proj.ProjectionType == "ALL" {
 		// The index has all the fields of the table: we're good.
 		return true
 	}
@@ -252,7 +252,7 @@ func (c *collection) globalFieldsIncluded(q *driver.Query, gi *dyn.GlobalSeconda
 		indexFields[skey] = true
 	}
 	for _, nka := range proj.NonKeyAttributes {
-		indexFields[*nka] = true
+		indexFields[nka] = true
 	}
 	// Every field path in the query must be in the index.
 	for _, fp := range q.FieldPaths {
@@ -265,15 +265,15 @@ func (c *collection) globalFieldsIncluded(q *driver.Query, gi *dyn.GlobalSeconda
 
 // Extract the names of the partition and sort key attributes from the schema of a
 // table or index.
-func keyAttributes(ks []*dyn.KeySchemaElement) (pkey, skey string) {
+func keyAttributes(ks []keySchemaElement) (pkey, skey string) {
 	for _, k := range ks {
-		switch *k.KeyType {
+		switch k.KeyType {
 		case "HASH":
-			pkey = *k.AttributeName
+			pkey = k.AttributeName
 		case "RANGE":
-			skey = *k.AttributeName
+			skey = k.AttributeName
 		default:
-			panic("bad key type: " + *k.KeyType)
+			panic("bad key type: " + k.KeyType)
 		}
 	}
 	return pkey, skey

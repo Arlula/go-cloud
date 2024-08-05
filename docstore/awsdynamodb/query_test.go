@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ func TestPlanQuery(t *testing.T) {
 	c := &collection{
 		table:        "T",
 		partitionKey: "tableP",
-		description:  &dynamodb.TableDescription{},
+		description:  &tableDescription{},
 		opts:         &Options{AllowScans: true, RevisionField: "rev"},
 	}
 
@@ -329,9 +330,9 @@ func TestPlanQuery(t *testing.T) {
 			if test.localIndexSortKey == "" {
 				c.description.LocalSecondaryIndexes = nil
 			} else {
-				c.description.LocalSecondaryIndexes = []*dynamodb.LocalSecondaryIndexDescription{
+				c.description.LocalSecondaryIndexes = []tableIndex{
 					{
-						IndexName:  aws.String("local"),
+						IndexName:  "local",
 						KeySchema:  keySchema("tableP", test.localIndexSortKey),
 						Projection: indexProjection(test.localIndexFields),
 					},
@@ -340,9 +341,9 @@ func TestPlanQuery(t *testing.T) {
 			if test.globalIndexPartitionKey == "" {
 				c.description.GlobalSecondaryIndexes = nil
 			} else {
-				c.description.GlobalSecondaryIndexes = []*dynamodb.GlobalSecondaryIndexDescription{
+				c.description.GlobalSecondaryIndexes = []tableIndex{
 					{
-						IndexName:  aws.String("global"),
+						IndexName:  "global",
 						KeySchema:  keySchema(test.globalIndexPartitionKey, test.globalIndexSortKey),
 						Projection: indexProjection(test.globalIndexFields),
 					},
@@ -370,6 +371,8 @@ func TestPlanQuery(t *testing.T) {
 				t.Fatalf("bad type for test.want: %T", test.want)
 			}
 			if diff := cmp.Diff(got, test.want, opts...); diff != "" {
+				t.Log(reflect.TypeOf(got))
+				t.Log(reflect.TypeOf(test.want))
 				t.Error("input:\n", diff)
 			}
 			gotPlan := gotRunner.queryPlan()
@@ -384,7 +387,7 @@ func TestQueryNoScans(t *testing.T) {
 	c := &collection{
 		table:        "T",
 		partitionKey: "tableP",
-		description:  &dynamodb.TableDescription{},
+		description:  &tableDescription{},
 		opts:         &Options{AllowScans: false},
 	}
 
@@ -411,14 +414,14 @@ func TestQueryNoScans(t *testing.T) {
 }
 
 // Make a key schema from the names of the partition and sort keys.
-func keySchema(pkey, skey string) []*dynamodb.KeySchemaElement {
-	return []*dynamodb.KeySchemaElement{
-		{AttributeName: &pkey, KeyType: aws.String("HASH")},
-		{AttributeName: &skey, KeyType: aws.String("RANGE")},
+func keySchema(pkey, skey string) []keySchemaElement {
+	return []keySchemaElement{
+		{AttributeName: pkey, KeyType: "HASH"},
+		{AttributeName: skey, KeyType: "RANGE"},
 	}
 }
 
-func indexProjection(fields []string) *dynamodb.Projection {
+func indexProjection(fields []string) projection {
 	var ptype string
 	switch {
 	case fields == nil:
@@ -428,17 +431,17 @@ func indexProjection(fields []string) *dynamodb.Projection {
 	default:
 		ptype = "INCLUDE"
 	}
-	proj := &dynamodb.Projection{ProjectionType: &ptype}
+	proj := projection{ProjectionType: ptype}
 	for _, f := range fields {
 		f := f
-		proj.NonKeyAttributes = append(proj.NonKeyAttributes, &f)
+		proj.NonKeyAttributes = append(proj.NonKeyAttributes, f)
 	}
 	return proj
 }
 
 func TestGlobalFieldsIncluded(t *testing.T) {
 	c := &collection{partitionKey: "tableP", sortKey: "tableS"}
-	gi := &dynamodb.GlobalSecondaryIndexDescription{
+	gi := tableIndex{
 		KeySchema: keySchema("globalP", "globalS"),
 	}
 	for _, test := range []struct {
@@ -486,7 +489,7 @@ func TestGlobalFieldsIncluded(t *testing.T) {
 			q := &driver.Query{FieldPaths: fps}
 			for _, p := range []struct {
 				name string
-				proj *dynamodb.Projection
+				proj projection
 				want bool
 			}{
 				{"ALL", indexProjection(nil), true},
