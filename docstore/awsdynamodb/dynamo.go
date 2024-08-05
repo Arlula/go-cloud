@@ -732,11 +732,19 @@ func (c *collection) BytesToRevision(b []byte) (interface{}, error) {
 }
 
 func (c *collection) As(i interface{}) bool {
-	p, ok := i.(**dyn.DynamoDB)
-	if !ok {
-		return false
+	if c.useV2 {
+		p, ok := i.(**dyn2.Client)
+		if !ok {
+			return false
+		}
+		*p = c.dbV2
+	} else {
+		p, ok := i.(**dyn.DynamoDB)
+		if !ok {
+			return false
+		}
+		*p = c.db
 	}
-	*p = c.db
 	return true
 }
 
