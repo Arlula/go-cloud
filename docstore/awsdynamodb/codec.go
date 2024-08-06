@@ -259,11 +259,15 @@ func encodeValue(v interface{}) (*dyn.AttributeValue, error) {
 	if err := driver.Encode(reflect.ValueOf(v), &e); err != nil {
 		return nil, err
 	}
-	return e.av, nil
+	return e.asV1AttributeValue()
 }
 
-func encodeFloat(f float64) *dyn.AttributeValue {
-	return new(dyn.AttributeValue).SetN(strconv.FormatFloat(f, 'f', -1, 64))
+func encodeValueV2(v interface{}) (dyn2Types.AttributeValue, error) {
+	var e encoder
+	if err := driver.Encode(reflect.ValueOf(v), &e); err != nil {
+		return nil, err
+	}
+	return e.asV2AttributeValue()
 }
 
 ////////////////////////////////////////////////////////////////
