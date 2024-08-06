@@ -40,20 +40,26 @@ func TestEncodeValue(t *testing.T) {
 		wantV1 *dyn.AttributeValue
 		wantV2 dyn2Types.AttributeValue
 	}{
+		// null
 		{nil, nullValue, &dyn2Types.AttributeValueMemberNULL{}},
+		{nullptr, nullValue, &dyn2Types.AttributeValueMemberNULL{}},
+		// number
 		{0, avn("0"), &dyn2Types.AttributeValueMemberN{Value: "0"}},
 		{uint64(999), avn("999"), &dyn2Types.AttributeValueMemberN{Value: "999"}},
 		{3.5, avn("3.5"), &dyn2Types.AttributeValueMemberN{Value: "3.5"}},
-		{"", nullValue, &dyn2Types.AttributeValueMemberNULL{}},
-		{"x", av().SetS("x"), &dyn2Types.AttributeValueMemberS{Value: "x"}},
-		{true, av().SetBOOL(true), &dyn2Types.AttributeValueMemberBOOL{Value: true}},
-		{nullptr, nullValue, &dyn2Types.AttributeValueMemberNULL{}},
 		{seven, avn("7"), &dyn2Types.AttributeValueMemberN{Value: "7"}},
 		{&seven, avn("7"), &dyn2Types.AttributeValueMemberN{Value: "7"}},
+		// string
+		{"", nullValue, &dyn2Types.AttributeValueMemberNULL{}},
+		{"x", av().SetS("x"), &dyn2Types.AttributeValueMemberS{Value: "x"}},
+		// bool
+		{true, av().SetBOOL(true), &dyn2Types.AttributeValueMemberBOOL{Value: true}},
+		// list
 		{[]int(nil), nullValue, &dyn2Types.AttributeValueMemberNULL{}},
 		{[]int{}, av().SetL([]*dyn.AttributeValue{}), &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{}}},
 		{[]int{1, 2}, avl(avn("1"), avn("2")), &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{&dyn2Types.AttributeValueMemberN{Value: "1"}, &dyn2Types.AttributeValueMemberN{Value: "2"}}}},
 		{[...]int{1, 2}, avl(avn("1"), avn("2")), &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{&dyn2Types.AttributeValueMemberN{Value: "1"}, &dyn2Types.AttributeValueMemberN{Value: "2"}}}},
+		// map
 		{[]interface{}{nil, false}, avl(nullValue, av().SetBOOL(false)), &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{&dyn2Types.AttributeValueMemberNULL{}, &dyn2Types.AttributeValueMemberBOOL{}}}}, // TODO
 		{map[string]int(nil), nullValue, &dyn2Types.AttributeValueMemberNULL{}},
 		{map[string]int{}, av().SetM(map[string]*dyn.AttributeValue{}), &dyn2Types.AttributeValueMemberM{Value: map[string]dyn2Types.AttributeValue{}}},
