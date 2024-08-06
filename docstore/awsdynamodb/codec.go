@@ -21,49 +21,68 @@ import (
 	"strconv"
 	"time"
 
+	dyn2Types "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	dyn "github.com/aws/aws-sdk-go/service/dynamodb"
 	"gocloud.dev/docstore/driver"
+	"gocloud.dev/internal/gcerr"
 )
 
 var nullValue = new(dyn.AttributeValue).SetNULL(true)
 
 type encoder struct {
-	av *dyn.AttributeValue
+	kind  reflect.Kind
+	value any
 }
 
-func (e *encoder) EncodeNil()        { e.av = nullValue }
-func (e *encoder) EncodeBool(x bool) { e.av = new(dyn.AttributeValue).SetBOOL(x) }
-func (e *encoder) EncodeInt(x int64) { e.av = new(dyn.AttributeValue).SetN(strconv.FormatInt(x, 10)) }
-func (e *encoder) EncodeUint(x uint64) {
-	e.av = new(dyn.AttributeValue).SetN(strconv.FormatUint(x, 10))
+func (e *encoder) EncodeNil() {
+	e.encodeValue(nil, reflect.Interface) // using as a flag only
 }
-func (e *encoder) EncodeBytes(x []byte)  { e.av = new(dyn.AttributeValue).SetB(x) }
-func (e *encoder) EncodeFloat(x float64) { e.av = encodeFloat(x) }
+func (e *encoder) EncodeBool(x bool) {
+	e.encodeValue(x, reflect.Bool)
+}
+func (e *encoder) EncodeInt(x int64) {
+	e.encodeValue(x, reflect.Int64)
+}
+func (e *encoder) EncodeUint(x uint64) {
+	e.encodeValue(x, reflect.Uint64)
+}
+func (e *encoder) EncodeBytes(x []byte) {
+	e.encodeValue(x, reflect.Array) // using as a flag only
+}
+func (e *encoder) EncodeFloat(x float64) {
+	e.encodeValue(x, reflect.Float64)
+}
+func (e *encoder) encodeValue(x any, kind reflect.Kind) {
+	e.kind = kind
+	e.value = x
+}
 
 func (e *encoder) ListIndex(int) { panic("impossible") }
 func (e *encoder) MapKey(string) { panic("impossible") }
 
 func (e *encoder) EncodeString(x string) {
 	if len(x) == 0 {
-		e.av = nullValue
+		e.EncodeNil()
 	} else {
-		e.av = new(dyn.AttributeValue).SetS(x)
+		e.encodeValue(x, reflect.String)
 	}
 }
 
 func (e *encoder) EncodeComplex(x complex128) {
-	e.av = new(dyn.AttributeValue).SetL([]*dyn.AttributeValue{encodeFloat(real(x)), encodeFloat(imag(x))})
+	e.encodeValue(x, reflect.Complex128)
 }
 
 func (e *encoder) EncodeList(n int) driver.Encoder {
-	s := make([]*dyn.AttributeValue, n)
-	e.av = new(dyn.AttributeValue).SetL(s)
+	s := make([]*encoder, n)
+	e.kind = reflect.Slice
+	e.value = s
 	return &listEncoder{s: s}
 }
 
 func (e *encoder) EncodeMap(n int) driver.Encoder {
-	m := make(map[string]*dyn.AttributeValue, n)
-	e.av = new(dyn.AttributeValue).SetM(m)
+	m := make(map[string]*encoder, n)
+	e.kind = reflect.Map
+	e.value = m
 	return &mapEncoder{m: m}
 }
 
@@ -82,25 +101,127 @@ func (e *encoder) EncodeSpecial(v reflect.Value) (bool, error) {
 }
 
 type listEncoder struct {
-	s []*dyn.AttributeValue
+	s []*encoder
 	encoder
 }
 
-func (e *listEncoder) ListIndex(i int) { e.s[i] = e.av }
+func (e *listEncoder) ListIndex(i int) {
+	ie := e.encoder
+	e.s[i] = &ie
+	e.encoder = encoder{}
+}
 
 type mapEncoder struct {
-	m map[string]*dyn.AttributeValue
+	m map[string]*encoder
 	encoder
 }
 
-func (e *mapEncoder) MapKey(k string) { e.m[k] = e.av }
+func (e *mapEncoder) MapKey(k string) {
+	ie := e.encoder
+	e.m[k] = &ie
+	e.encoder = encoder{}
+}
 
 func encodeDoc(doc driver.Document) (*dyn.AttributeValue, error) {
 	var e encoder
 	if err := doc.Encode(&e); err != nil {
 		return nil, err
 	}
-	return e.av, nil
+	return e.asV1AttributeValue()
+}
+
+func (e *encoder) asV1AttributeValue() (*dyn.AttributeValue, error) {
+	var err error
+	switch e.kind {
+	case reflect.Interface: // flag for null
+		return nullValue, nil
+	case reflect.Bool:
+		return new(dyn.AttributeValue).SetBOOL(e.value.(bool)), nil
+	case reflect.Int64:
+		return new(dyn.AttributeValue).SetN(strconv.FormatInt(e.value.(int64), 10)), nil
+	case reflect.Uint64:
+		return new(dyn.AttributeValue).SetN(strconv.FormatUint(e.value.(uint64), 10)), nil
+	case reflect.Array: // flag for byte array
+		return new(dyn.AttributeValue).SetB(e.value.([]byte)), nil
+	case reflect.Float64:
+		return new(dyn.AttributeValue).SetN(strconv.FormatFloat(e.value.(float64), 'f', -1, 64)), nil
+	case reflect.String:
+		return new(dyn.AttributeValue).SetS(e.value.(string)), nil
+	case reflect.Complex128:
+		return new(dyn.AttributeValue).SetL([]*dyn.AttributeValue{
+			new(dyn.AttributeValue).SetN(strconv.FormatFloat(real(e.value.(complex128)), 'f', -1, 64)),
+			new(dyn.AttributeValue).SetN(strconv.FormatFloat(imag(e.value.(complex128)), 'f', -1, 64)),
+		}), nil
+	case reflect.Slice:
+		es := e.value.([]*encoder)
+		s := make([]*dyn.AttributeValue, len(es))
+		for i, se := range es {
+			s[i], err = se.asV1AttributeValue()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return new(dyn.AttributeValue).SetL(s), nil
+	case reflect.Map:
+		em := e.value.(map[string]*encoder)
+		m := make(map[string]*dyn.AttributeValue, len(em))
+		for k, se := range em {
+			m[k], err = se.asV1AttributeValue()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return new(dyn.AttributeValue).SetM(m), nil
+	}
+
+	return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "unknown type to encode %s", reflect.TypeOf(e.value).Kind())
+}
+
+func (e *encoder) asV2AttributeValue() (dyn2Types.AttributeValue, error) {
+	var err error
+	switch e.kind {
+	case reflect.Interface: // flag for null
+		return &dyn2Types.AttributeValueMemberNULL{}, nil
+	case reflect.Bool:
+		return &dyn2Types.AttributeValueMemberBOOL{Value: e.value.(bool)}, nil
+	case reflect.Int64:
+		return &dyn2Types.AttributeValueMemberN{Value: strconv.FormatInt(e.value.(int64), 10)}, nil
+	case reflect.Uint64:
+		return &dyn2Types.AttributeValueMemberN{Value: strconv.FormatUint(e.value.(uint64), 10)}, nil
+	case reflect.Array: // flag for byte array
+		return &dyn2Types.AttributeValueMemberB{Value: e.value.([]byte)}, nil
+	case reflect.Float64:
+		return &dyn2Types.AttributeValueMemberN{Value: strconv.FormatFloat(e.value.(float64), 'f', -1, 64)}, nil
+	case reflect.String:
+		return &dyn2Types.AttributeValueMemberS{Value: e.value.(string)}, nil
+	case reflect.Complex128:
+		return &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{
+			&dyn2Types.AttributeValueMemberN{Value: strconv.FormatFloat(real(e.value.(complex128)), 'f', -1, 64)},
+			&dyn2Types.AttributeValueMemberN{Value: strconv.FormatFloat(imag(e.value.(complex128)), 'f', -1, 64)},
+		}}, nil
+	case reflect.Slice:
+		es := e.value.([]*encoder)
+		s := make([]dyn2Types.AttributeValue, len(es))
+		for i, se := range es {
+			s[i], err = se.asV2AttributeValue()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &dyn2Types.AttributeValueMemberL{Value: s}, nil
+	case reflect.Map:
+		em := e.value.(map[string]*encoder)
+		m := make(map[string]dyn2Types.AttributeValue, len(em))
+		for k, se := range em {
+			m[k], err = se.asV2AttributeValue()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &dyn2Types.AttributeValueMemberM{Value: m}, nil
+	}
+
+	return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "unknown type to encode %s", reflect.TypeOf(e.value).Kind())
 }
 
 // Encode the key fields of the given document into a map AttributeValue.

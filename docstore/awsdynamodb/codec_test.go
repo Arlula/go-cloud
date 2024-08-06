@@ -67,7 +67,10 @@ func TestEncodeValue(t *testing.T) {
 		if err := driver.Encode(reflect.ValueOf(test.in), &e); err != nil {
 			t.Fatal(err)
 		}
-		got := e.av
+		got, err := e.asV1AttributeValue()
+		if err != nil {
+			t.Errorf("%#v: failed encoding as V1 attribute value", test.in)
+		}
 		if !cmp.Equal(got, test.want, cmpopts.IgnoreUnexported(dyn.AttributeValue{})) {
 			t.Errorf("%#v: got %#v, want %#v", test.in, got, test.want)
 		}
