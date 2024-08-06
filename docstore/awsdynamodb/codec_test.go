@@ -60,7 +60,7 @@ func TestEncodeValue(t *testing.T) {
 		{[]int{1, 2}, avl(avn("1"), avn("2")), &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{&dyn2Types.AttributeValueMemberN{Value: "1"}, &dyn2Types.AttributeValueMemberN{Value: "2"}}}},
 		{[...]int{1, 2}, avl(avn("1"), avn("2")), &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{&dyn2Types.AttributeValueMemberN{Value: "1"}, &dyn2Types.AttributeValueMemberN{Value: "2"}}}},
 		// map
-		{[]interface{}{nil, false}, avl(nullValue, av().SetBOOL(false)), &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{&dyn2Types.AttributeValueMemberNULL{}, &dyn2Types.AttributeValueMemberBOOL{}}}}, // TODO
+		{[]interface{}{nil, false}, avl(nullValue, av().SetBOOL(false)), &dyn2Types.AttributeValueMemberL{Value: []dyn2Types.AttributeValue{&dyn2Types.AttributeValueMemberNULL{}, &dyn2Types.AttributeValueMemberBOOL{}}}},
 		{map[string]int(nil), nullValue, &dyn2Types.AttributeValueMemberNULL{}},
 		{map[string]int{}, av().SetM(map[string]*dyn.AttributeValue{}), &dyn2Types.AttributeValueMemberM{Value: map[string]dyn2Types.AttributeValue{}}},
 		{
@@ -101,6 +101,60 @@ func TestEncodeValue(t *testing.T) {
 			dyn2Types.AttributeValueMemberSS{},
 		)) {
 			t.Errorf("%#v: got %#v, want %#v", test.in, gotV2, test.wantV2)
+		}
+	}
+}
+
+func TestDecodeValue(t *testing.T) {
+	av := func() *dyn.AttributeValue { return &dyn.AttributeValue{} }
+	avn := func(s string) *dyn.AttributeValue { return av().SetN(s) }
+	for _, tc := range []struct {
+		in  *dyn.AttributeValue
+		out any
+	}{
+		// NULL
+		// {nullValue, nil}, // TODO: cant reflect new, how to test?
+		// bool
+		{av().SetBOOL(false), false},
+		{av().SetBOOL(true), true},
+		// string
+		{av().SetS("x"), "x"},
+		// int64
+		{avn("7"), int64(7)},
+		{avn("-7"), int64(-7)},
+		{avn("0"), int64(0)},
+		// uint64
+		{avn("7"), uint64(7)},
+		{avn("0"), uint64(0)},
+		// float64
+		{avn("7"), float64(7)},
+		{avn("0"), float64(0)},
+		{avn("3.1415"), float64(3.1415)},
+		// complex128
+		// TODO: fails at driver
+		// {av().SetL([]*dyn.AttributeValue{avn("12"), avn("37")}), complex(12, 37)},
+		// []byte
+		{av().SetB([]byte(`123`)), []byte(`123`)},
+		// List
+		{av().SetL([]*dyn.AttributeValue{avn("12"), avn("37")}), []int64{12, 37}},
+		{av().SetL([]*dyn.AttributeValue{avn("12"), avn("37")}), []uint64{12, 37}},
+		{av().SetL([]*dyn.AttributeValue{avn("12.8"), avn("37.1")}), []float64{12.8, 37.1}},
+		// Map
+		{av().SetM(map[string]*dyn.AttributeValue{}), map[string]int{}},
+		{av().SetM(map[string]*dyn.AttributeValue{"a": avn("1"), "b": avn("2")}), map[string]int{"a": 1, "b": 2}},
+	} {
+		var (
+			d      = decoder{av: tc.in}
+			target = reflect.New(reflect.TypeOf(tc.out))
+		)
+
+		if err := driver.Decode(target.Elem(), &d); err != nil {
+			t.Errorf("error decoding value %#v, got error: %#v", tc.in, err)
+			continue
+		}
+
+		if !cmp.Equal(target.Elem().Interface(), tc.out) {
+			t.Errorf("%#v: got %#v, want %#v", tc.in, target.Elem().Interface(), tc.out)
 		}
 	}
 }
