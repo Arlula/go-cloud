@@ -108,53 +108,77 @@ func TestEncodeValue(t *testing.T) {
 func TestDecodeValue(t *testing.T) {
 	av := func() *dyn.AttributeValue { return &dyn.AttributeValue{} }
 	avn := func(s string) *dyn.AttributeValue { return av().SetN(s) }
+	avl := func(vals ...*dyn.AttributeValue) *dyn.AttributeValue { return av().SetL(vals) }
+	avn2 := func(s string) dyn2Types.AttributeValue { return &dyn2Types.AttributeValueMemberN{Value: s} }
+	avl2 := func(vals ...dyn2Types.AttributeValue) dyn2Types.AttributeValue {
+		return &dyn2Types.AttributeValueMemberL{Value: vals}
+	}
 	for _, tc := range []struct {
-		in  *dyn.AttributeValue
-		out any
+		inV1 *dyn.AttributeValue
+		inV2 dyn2Types.AttributeValue
+		out  any
 	}{
 		// NULL
 		// {nullValue, nil}, // TODO: cant reflect new, how to test?
 		// bool
-		{av().SetBOOL(false), false},
-		{av().SetBOOL(true), true},
+		{av().SetBOOL(false), &dyn2Types.AttributeValueMemberBOOL{Value: false}, false},
+		{av().SetBOOL(true), &dyn2Types.AttributeValueMemberBOOL{Value: true}, true},
 		// string
-		{av().SetS("x"), "x"},
+		{av().SetS("x"), &dyn2Types.AttributeValueMemberS{Value: "x"}, "x"},
 		// int64
-		{avn("7"), int64(7)},
-		{avn("-7"), int64(-7)},
-		{avn("0"), int64(0)},
+		{avn("7"), avn2("7"), int64(7)},
+		{avn("-7"), avn2("-7"), int64(-7)},
+		{avn("0"), avn2("0"), int64(0)},
 		// uint64
-		{avn("7"), uint64(7)},
-		{avn("0"), uint64(0)},
+		{avn("7"), avn2("7"), uint64(7)},
+		{avn("0"), avn2("0"), uint64(0)},
 		// float64
-		{avn("7"), float64(7)},
-		{avn("0"), float64(0)},
-		{avn("3.1415"), float64(3.1415)},
+		{avn("7"), avn2("7"), float64(7)},
+		{avn("0"), avn2("0"), float64(0)},
+		{avn("3.1415"), avn2("3.1415"), float64(3.1415)},
 		// complex128
 		// TODO: fails at driver
 		// {av().SetL([]*dyn.AttributeValue{avn("12"), avn("37")}), complex(12, 37)},
 		// []byte
-		{av().SetB([]byte(`123`)), []byte(`123`)},
+		{av().SetB([]byte(`123`)), &dyn2Types.AttributeValueMemberB{Value: []byte(`123`)}, []byte(`123`)},
 		// List
-		{av().SetL([]*dyn.AttributeValue{avn("12"), avn("37")}), []int64{12, 37}},
-		{av().SetL([]*dyn.AttributeValue{avn("12"), avn("37")}), []uint64{12, 37}},
-		{av().SetL([]*dyn.AttributeValue{avn("12.8"), avn("37.1")}), []float64{12.8, 37.1}},
+		{avl(avn("12"), avn("37")), avl2(avn2("12"), avn2("37")), []int64{12, 37}},
+		{avl(avn("12"), avn("37")), avl2(avn2("12"), avn2("37")), []uint64{12, 37}},
+		{avl(avn("12.8"), avn("37.1")), avl2(avn2("12.8"), avn2("37.1")), []float64{12.8, 37.1}},
 		// Map
-		{av().SetM(map[string]*dyn.AttributeValue{}), map[string]int{}},
-		{av().SetM(map[string]*dyn.AttributeValue{"a": avn("1"), "b": avn("2")}), map[string]int{"a": 1, "b": 2}},
+		{
+			av().SetM(map[string]*dyn.AttributeValue{}),
+			&dyn2Types.AttributeValueMemberM{Value: map[string]dyn2Types.AttributeValue{}},
+			map[string]int{},
+		},
+		{
+			av().SetM(map[string]*dyn.AttributeValue{"a": avn("1"), "b": avn("2")}),
+			&dyn2Types.AttributeValueMemberM{Value: map[string]dyn2Types.AttributeValue{"a": avn2("1"), "b": avn2("2")}},
+			map[string]int{"a": 1, "b": 2},
+		},
 	} {
 		var (
-			d      = decoder{av: tc.in}
+			d      = decoder{av1: tc.inV1}
 			target = reflect.New(reflect.TypeOf(tc.out))
 		)
 
 		if err := driver.Decode(target.Elem(), &d); err != nil {
-			t.Errorf("error decoding value %#v, got error: %#v", tc.in, err)
+			t.Errorf("[V1] error decoding value %#v, got error: %#v", tc.inV1, err)
 			continue
 		}
 
 		if !cmp.Equal(target.Elem().Interface(), tc.out) {
-			t.Errorf("%#v: got %#v, want %#v", tc.in, target.Elem().Interface(), tc.out)
+			t.Errorf("[V1] %#v: got %#v, want %#v", tc.inV1, target.Elem().Interface(), tc.out)
+		}
+
+		d = decoder{av2: tc.inV2}
+		if err := driver.Decode(target.Elem(), &d); err != nil {
+			t.Errorf("[V2] error decoding value %#v, got error: %#v", tc.inV2, err)
+			continue
+		}
+
+		if !cmp.Equal(target.Elem().Interface(), tc.out) {
+			t.Errorf("[V2] %#v: got %#v, want %#v", tc.inV2, target.Elem().Interface(), tc.out)
 		}
 	}
 }
@@ -170,7 +194,7 @@ func TestDecodeErrorOnUnsupported(t *testing.T) {
 		{av().SetNS([]*string{sptr("1.1"), sptr("-2.2"), sptr("3.3")}), []float64{}},
 		{av().SetBS([][]byte{{4}, {5}, {6}}), [][]byte{}},
 	} {
-		d := decoder{av: tc.in}
+		d := decoder{av1: tc.in}
 		if err := driver.Decode(reflect.ValueOf(tc.out), &d); err == nil {
 			t.Error("got nil error, want unsupported error")
 		}
