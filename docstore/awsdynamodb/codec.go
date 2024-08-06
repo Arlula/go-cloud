@@ -447,6 +447,62 @@ func toGoValue(av *dyn.AttributeValue) (interface{}, error) {
 	}
 }
 
+func toGoValueV2(av dyn2Types.AttributeValue) (interface{}, error) {
+	var err error
+
+	switch t := av.(type) {
+	case *dyn2Types.AttributeValueMemberB:
+		return t.Value, nil
+	case *dyn2Types.AttributeValueMemberBOOL:
+		return t.Value, nil
+	case *dyn2Types.AttributeValueMemberBS:
+		return t.Value, nil
+	case *dyn2Types.AttributeValueMemberL:
+		l := make([]any, len(t.Value))
+		for i, v := range t.Value {
+			l[i], err = toGoValueV2(v)
+			if err != nil {
+				return l, err
+			}
+		}
+		return l, nil
+	case *dyn2Types.AttributeValueMemberM:
+		m := make(map[string]any, len(t.Value))
+		for k, v := range t.Value {
+			m[k], err = toGoValueV2(v)
+			if err != nil {
+				return m, err
+			}
+		}
+		return m, err
+	case *dyn2Types.AttributeValueMemberN:
+		f, err := strconv.ParseFloat(t.Value, 64)
+		if err != nil {
+			return nil, err
+		}
+		i := int64(f)
+		if float64(i) == f {
+			return i, nil
+		}
+		u := uint64(f)
+		if float64(u) == f {
+			return u, nil
+		}
+		return f, nil
+	case *dyn2Types.AttributeValueMemberNS:
+		return t.Value, nil
+	case *dyn2Types.AttributeValueMemberNULL:
+		return nil, nil
+	case *dyn2Types.AttributeValueMemberS:
+		return t.Value, nil
+	case *dyn2Types.AttributeValueMemberSS:
+		return t.Value, nil
+
+	default:
+		return nil, fmt.Errorf("awsdynamodb: AttributeValue %s not supported", av)
+	}
+}
+
 func (d decoder) AsSpecial(v reflect.Value) (bool, interface{}, error) {
 	unsupportedTypes := `unsupported type, the docstore driver for DynamoDB does
 	not decode DynamoDB set types, such as string set, number set and binary set`
