@@ -253,79 +253,134 @@ func (c *collection) runGets(ctx context.Context, actions []*driver.Action, errs
 }
 
 func (c *collection) batchGet(ctx context.Context, gets []*driver.Action, errs []error, opts *driver.RunActionsOptions, start, end int) {
+	// errors need to be mapped to the actions' indices.
+	setErr := func(err error) {
+		for i := start; i <= end; i++ {
+			errs[gets[i].Index] = err
+		}
+	}
+
+	var (
+		keys                     = make([]*encoder, 0, end-start+1)
+		projectionExpression     *string
+		expressionAttributeNames map[string]*string
+	)
+	for i := start; i <= end; i++ {
+		av, err := encodeDocKeyFields(gets[i].Doc, c.partitionKey, c.sortKey)
+		if err != nil {
+			errs[gets[i].Index] = err
+		}
+
+		ave, err := encodeValue(av)
+		if err != nil {
+			setErr(err)
+			return
+		}
+
+		keys = append(keys, ave)
+	}
+	if len(gets[start].FieldPaths) != 0 {
+		// We need to add the key fields if the user doesn't include them. The
+		// BatchGet API doesn't return them otherwise.
+		var hasP, hasS bool
+		var nbs []expression.NameBuilder
+		for _, fp := range gets[start].FieldPaths {
+			p := strings.Join(fp, ".")
+			nbs = append(nbs, expression.Name(p))
+			if p == c.partitionKey {
+				hasP = true
+			} else if p == c.sortKey {
+				hasS = true
+			}
+		}
+		if !hasP {
+			nbs = append(nbs, expression.Name(c.partitionKey))
+		}
+		if c.sortKey != "" && !hasS {
+			nbs = append(nbs, expression.Name(c.sortKey))
+		}
+		expr, err := expression.NewBuilder().
+			WithProjection(expression.AddNames(expression.ProjectionBuilder{}, nbs...)).
+			Build()
+		if err != nil {
+			setErr(err)
+			return
+		}
+		projectionExpression = expr.Projection()
+		expressionAttributeNames = expr.Names()
+	}
+
+	var (
+		beforeDo = func(in any) {
+			if opts.BeforeDo != nil {
+				if err := opts.BeforeDo(driver.AsFunc(in)); err != nil {
+					setErr(err)
+					return
+				}
+			}
+		}
+		err error
+
+		found  = make([]bool, end-start+1)
+		am     = mapActionIndices(gets, start, end)
+		outMap []*decoder
+	)
+
 	if c.useV2 {
-		c.batchGetV2(ctx, gets, errs, opts, start, end)
+		in := &dyn2.BatchGetItemInput{RequestItems: map[string]dyn2Types.KeysAndAttributes{c.table: dyn2Types.KeysAndAttributes{
+			Keys:                     make([]map[string]dyn2Types.AttributeValue, len(keys)),
+			ConsistentRead:           aws.Bool(c.opts.ConsistentRead),
+			ProjectionExpression:     projectionExpression,
+			ExpressionAttributeNames: reReferenceMapString(expressionAttributeNames),
+		}}}
+		beforeDo(in)
+		for i, k := range keys {
+			in.RequestItems[c.table].Keys[i], err = k.asV2AttributeMap()
+			if err != nil {
+				setErr(err)
+				return
+			}
+		}
+		out, err := c.dbV2.BatchGetItem(ctx, in)
+		if err != nil {
+			setErr(err)
+			return
+		}
+		outMap = make([]*decoder, len(out.Responses[c.table]))
+		for i, k := range out.Responses[c.table] {
+			outMap[i] = &decoder{av2: &dyn2Types.AttributeValueMemberM{Value: k}}
+		}
 	} else {
-		c.batchGetV1(ctx, gets, errs, opts, start, end)
-	}
-}
-
-func (c *collection) batchGetV1(ctx context.Context, gets []*driver.Action, errs []error, opts *driver.RunActionsOptions, start, end int) {
-	// errors need to be mapped to the actions' indices.
-	setErr := func(err error) {
-		for i := start; i <= end; i++ {
-			errs[gets[i].Index] = err
-		}
-	}
-
-	keys := make([]map[string]*dyn.AttributeValue, 0, end-start+1)
-	for i := start; i <= end; i++ {
-		av, err := encodeDocKeyFields(gets[i].Doc, c.partitionKey, c.sortKey)
-		if err != nil {
-			errs[gets[i].Index] = err
-		}
-
-		keys = append(keys, av.M)
-	}
-	ka := &dyn.KeysAndAttributes{
-		Keys:           keys,
-		ConsistentRead: aws.Bool(c.opts.ConsistentRead),
-	}
-	if len(gets[start].FieldPaths) != 0 {
-		// We need to add the key fields if the user doesn't include them. The
-		// BatchGet API doesn't return them otherwise.
-		var hasP, hasS bool
-		var nbs []expression.NameBuilder
-		for _, fp := range gets[start].FieldPaths {
-			p := strings.Join(fp, ".")
-			nbs = append(nbs, expression.Name(p))
-			if p == c.partitionKey {
-				hasP = true
-			} else if p == c.sortKey {
-				hasS = true
+		in := &dyn.BatchGetItemInput{RequestItems: map[string]*dyn.KeysAndAttributes{c.table: &dyn.KeysAndAttributes{
+			Keys:                     make([]map[string]*dyn.AttributeValue, len(keys)),
+			ConsistentRead:           aws.Bool(c.opts.ConsistentRead),
+			ProjectionExpression:     projectionExpression,
+			ExpressionAttributeNames: expressionAttributeNames,
+		}}}
+		beforeDo(in)
+		for i, k := range keys {
+			in.RequestItems[c.table].Keys[i], err = k.asV1AttributeMap()
+			if err != nil {
+				setErr(err)
+				return
 			}
 		}
-		if !hasP {
-			nbs = append(nbs, expression.Name(c.partitionKey))
-		}
-		if c.sortKey != "" && !hasS {
-			nbs = append(nbs, expression.Name(c.sortKey))
-		}
-		expr, err := expression.NewBuilder().
-			WithProjection(expression.AddNames(expression.ProjectionBuilder{}, nbs...)).
-			Build()
+		out, err := c.db.BatchGetItemWithContext(ctx, in)
 		if err != nil {
 			setErr(err)
 			return
 		}
-		ka.ProjectionExpression = expr.Projection()
-		ka.ExpressionAttributeNames = expr.Names()
-	}
-	in := &dyn.BatchGetItemInput{RequestItems: map[string]*dyn.KeysAndAttributes{c.table: ka}}
-	if opts.BeforeDo != nil {
-		if err := opts.BeforeDo(driver.AsFunc(in)); err != nil {
-			setErr(err)
-			return
+		outMap = make([]*decoder, len(out.Responses[c.table]))
+		for i, k := range out.Responses[c.table] {
+			outMap[i] = &decoder{av1: new(dyn.AttributeValue).SetM(k)}
 		}
 	}
-	out, err := c.db.BatchGetItemWithContext(ctx, in)
 	if err != nil {
 		setErr(err)
 		return
 	}
-	found := make([]bool, end-start+1)
-	am := mapActionIndices(gets, start, end)
-	for _, item := range out.Responses[c.table] {
+
+	for _, item := range outMap {
 		if item != nil {
 			key := map[string]interface{}{c.partitionKey: nil}
 			if c.sortKey != "" {
@@ -335,7 +390,7 @@ func (c *collection) batchGetV1(ctx context.Context, gets []*driver.Action, errs
 			if err != nil {
 				panic(err)
 			}
-			err = decodeDoc(&dyn.AttributeValue{M: item}, keysOnly)
+			err = keysOnly.Decode(item)
 			if err != nil {
 				continue
 			}
@@ -344,102 +399,7 @@ func (c *collection) batchGetV1(ctx context.Context, gets []*driver.Action, errs
 				continue
 			}
 			i := am[decKey]
-			errs[gets[i].Index] = decodeDoc(&dyn.AttributeValue{M: item}, gets[i].Doc)
-			found[i-start] = true
-		}
-	}
-	for delta, f := range found {
-		if !f {
-			errs[gets[start+delta].Index] = gcerr.Newf(gcerr.NotFound, nil, "item %v not found", gets[start+delta].Doc)
-		}
-	}
-}
-
-func (c *collection) batchGetV2(ctx context.Context, gets []*driver.Action, errs []error, opts *driver.RunActionsOptions, start, end int) {
-	// errors need to be mapped to the actions' indices.
-	setErr := func(err error) {
-		for i := start; i <= end; i++ {
-			errs[gets[i].Index] = err
-		}
-	}
-
-	keys := make([]map[string]dyn2Types.AttributeValue, 0, end-start+1)
-	for i := start; i <= end; i++ {
-		av, err := encodeDocKeyFields(gets[i].Doc, c.partitionKey, c.sortKey)
-		if err != nil {
-			errs[gets[i].Index] = err
-		}
-
-		keys = append(keys, av.M)
-	}
-	ka := &dyn2Types.KeysAndAttributes{
-		Keys:           keys,
-		ConsistentRead: aws.Bool(c.opts.ConsistentRead),
-	}
-	if len(gets[start].FieldPaths) != 0 {
-		// We need to add the key fields if the user doesn't include them. The
-		// BatchGet API doesn't return them otherwise.
-		var hasP, hasS bool
-		var nbs []expression.NameBuilder
-		for _, fp := range gets[start].FieldPaths {
-			p := strings.Join(fp, ".")
-			nbs = append(nbs, expression.Name(p))
-			if p == c.partitionKey {
-				hasP = true
-			} else if p == c.sortKey {
-				hasS = true
-			}
-		}
-		if !hasP {
-			nbs = append(nbs, expression.Name(c.partitionKey))
-		}
-		if c.sortKey != "" && !hasS {
-			nbs = append(nbs, expression.Name(c.sortKey))
-		}
-		expr, err := expression.NewBuilder().
-			WithProjection(expression.AddNames(expression.ProjectionBuilder{}, nbs...)).
-			Build()
-		if err != nil {
-			setErr(err)
-			return
-		}
-		ka.ProjectionExpression = expr.Projection()
-		ka.ExpressionAttributeNames = expr.Names()
-	}
-	in := &dyn2.BatchGetItemInput{RequestItems: map[string]dyn2Types.KeysAndAttributes{c.table: ka}}
-	if opts.BeforeDo != nil {
-		if err := opts.BeforeDo(driver.AsFunc(in)); err != nil {
-			setErr(err)
-			return
-		}
-	}
-	out, err := c.dbV2.BatchGetItem(ctx, in)
-	if err != nil {
-		setErr(err)
-		return
-	}
-	found := make([]bool, end-start+1)
-	am := mapActionIndices(gets, start, end)
-	for _, item := range out.Responses[c.table] {
-		if item != nil {
-			key := map[string]interface{}{c.partitionKey: nil}
-			if c.sortKey != "" {
-				key[c.sortKey] = nil
-			}
-			keysOnly, err := driver.NewDocument(key)
-			if err != nil {
-				panic(err)
-			}
-			err = decodeDoc(&dyn.AttributeValue{M: item}, keysOnly)
-			if err != nil {
-				continue
-			}
-			decKey, err := c.Key(keysOnly)
-			if err != nil {
-				continue
-			}
-			i := am[decKey]
-			errs[gets[i].Index] = decodeDoc(&dyn.AttributeValue{M: item}, gets[i].Doc)
+			errs[gets[i].Index] = gets[i].Doc.Decode(item)
 			found[i-start] = true
 		}
 	}

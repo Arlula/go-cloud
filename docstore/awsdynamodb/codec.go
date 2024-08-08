@@ -224,11 +224,33 @@ func (e *encoder) asV2AttributeValue() (dyn2Types.AttributeValue, error) {
 	return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "unknown type to encode %s", reflect.TypeOf(e.value).Kind())
 }
 
+func (e *encoder) asV1AttributeMap() (map[string]*dyn.AttributeValue, error) {
+	if e.kind != reflect.Map {
+		return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "incorrect type to encode %s, not map", reflect.TypeOf(e.value).Kind())
+	}
+	av, err := e.asV1AttributeValue()
+	if err != nil {
+		return nil, err
+	}
+	return av.M, nil
+}
+
+func (e *encoder) asV2AttributeMap() (map[string]dyn2Types.AttributeValue, error) {
+	if e.kind != reflect.Map {
+		return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "incorrect type to encode %s, not map", reflect.TypeOf(e.value).Kind())
+	}
+	av, err := e.asV2AttributeValue()
+	if err != nil {
+		return nil, err
+	}
+	return av.(*dyn2Types.AttributeValueMemberM).Value, nil
+}
+
 // Encode the key fields of the given document into a map AttributeValue.
 // pkey and skey are the names of the partition key field and the sort key field.
 // pkey must always be non-empty, but skey may be empty if the collection has no sort key.
-func encodeDocKeyFields(doc driver.Document, pkey, skey string) (*dyn.AttributeValue, error) {
-	m := map[string]*dyn.AttributeValue{}
+func encodeDocKeyFields(doc driver.Document, pkey, skey string) (map[string]*encoder, error) {
+	m := map[string]*encoder{}
 
 	set := func(fieldName string) error {
 		fieldVal, err := doc.GetField(fieldName)
@@ -251,23 +273,15 @@ func encodeDocKeyFields(doc driver.Document, pkey, skey string) (*dyn.AttributeV
 			return nil, err
 		}
 	}
-	return new(dyn.AttributeValue).SetM(m), nil
+	return m, nil
 }
 
-func encodeValue(v interface{}) (*dyn.AttributeValue, error) {
+func encodeValue(v interface{}) (*encoder, error) {
 	var e encoder
 	if err := driver.Encode(reflect.ValueOf(v), &e); err != nil {
 		return nil, err
 	}
-	return e.asV1AttributeValue()
-}
-
-func encodeValueV2(v interface{}) (dyn2Types.AttributeValue, error) {
-	var e encoder
-	if err := driver.Encode(reflect.ValueOf(v), &e); err != nil {
-		return nil, err
-	}
-	return e.asV2AttributeValue()
+	return &e, nil
 }
 
 ////////////////////////////////////////////////////////////////
@@ -702,4 +716,16 @@ func (d decoder) asV2Special(v reflect.Value) (bool, interface{}, error) {
 	}
 
 	return false, nil, nil
+}
+
+func reReferenceMapString(m map[string]*string) map[string]string {
+	mOut := make(map[string]string, len(m))
+
+	for k, v := range m {
+		if v != nil {
+			mOut[k] = *v
+		}
+	}
+
+	return mOut
 }
