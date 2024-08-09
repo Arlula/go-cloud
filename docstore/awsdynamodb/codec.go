@@ -29,38 +29,38 @@ import (
 
 var nullValue = new(dyn.AttributeValue).SetNULL(true)
 
-type encoder struct {
+type codec struct {
 	kind  reflect.Kind
 	value any
 }
 
-func (e *encoder) EncodeNil() {
+func (e *codec) EncodeNil() {
 	e.encodeValue(nil, reflect.Interface) // using as a flag only
 }
-func (e *encoder) EncodeBool(x bool) {
+func (e *codec) EncodeBool(x bool) {
 	e.encodeValue(x, reflect.Bool)
 }
-func (e *encoder) EncodeInt(x int64) {
+func (e *codec) EncodeInt(x int64) {
 	e.encodeValue(x, reflect.Int64)
 }
-func (e *encoder) EncodeUint(x uint64) {
+func (e *codec) EncodeUint(x uint64) {
 	e.encodeValue(x, reflect.Uint64)
 }
-func (e *encoder) EncodeBytes(x []byte) {
+func (e *codec) EncodeBytes(x []byte) {
 	e.encodeValue(x, reflect.Array) // using as a flag only
 }
-func (e *encoder) EncodeFloat(x float64) {
+func (e *codec) EncodeFloat(x float64) {
 	e.encodeValue(x, reflect.Float64)
 }
-func (e *encoder) encodeValue(x any, kind reflect.Kind) {
+func (e *codec) encodeValue(x any, kind reflect.Kind) {
 	e.kind = kind
 	e.value = x
 }
 
-func (e *encoder) ListIndex(int) { panic("impossible") }
-func (e *encoder) MapKey(string) { panic("impossible") }
+func (e *codec) ListIndex(int) { panic("impossible") }
+func (e *codec) MapKey(string) { panic("impossible") }
 
-func (e *encoder) EncodeString(x string) {
+func (e *codec) EncodeString(x string) {
 	if len(x) == 0 {
 		e.EncodeNil()
 	} else {
@@ -68,19 +68,19 @@ func (e *encoder) EncodeString(x string) {
 	}
 }
 
-func (e *encoder) EncodeComplex(x complex128) {
+func (e *codec) EncodeComplex(x complex128) {
 	e.encodeValue(x, reflect.Complex128)
 }
 
-func (e *encoder) EncodeList(n int) driver.Encoder {
-	s := make([]*encoder, n)
+func (e *codec) EncodeList(n int) driver.Encoder {
+	s := make([]*codec, n)
 	e.kind = reflect.Slice
 	e.value = s
 	return &listEncoder{s: s}
 }
 
-func (e *encoder) EncodeMap(n int) driver.Encoder {
-	m := make(map[string]*encoder, n)
+func (e *codec) EncodeMap(n int) driver.Encoder {
+	m := make(map[string]*codec, n)
 	e.kind = reflect.Map
 	e.value = m
 	return &mapEncoder{m: m}
@@ -89,7 +89,7 @@ func (e *encoder) EncodeMap(n int) driver.Encoder {
 var typeOfGoTime = reflect.TypeOf(time.Time{})
 
 // EncodeSpecial encodes time.Time specially.
-func (e *encoder) EncodeSpecial(v reflect.Value) (bool, error) {
+func (e *codec) EncodeSpecial(v reflect.Value) (bool, error) {
 	switch v.Type() {
 	case typeOfGoTime:
 		ts := v.Interface().(time.Time).Format(time.RFC3339Nano)
@@ -101,36 +101,36 @@ func (e *encoder) EncodeSpecial(v reflect.Value) (bool, error) {
 }
 
 type listEncoder struct {
-	s []*encoder
-	encoder
+	s []*codec
+	codec
 }
 
 func (e *listEncoder) ListIndex(i int) {
-	ie := e.encoder
+	ie := e.codec
 	e.s[i] = &ie
-	e.encoder = encoder{}
+	e.codec = codec{}
 }
 
 type mapEncoder struct {
-	m map[string]*encoder
-	encoder
+	m map[string]*codec
+	codec
 }
 
 func (e *mapEncoder) MapKey(k string) {
-	ie := e.encoder
+	ie := e.codec
 	e.m[k] = &ie
-	e.encoder = encoder{}
+	e.codec = codec{}
 }
 
 func encodeDoc(doc driver.Document) (*dyn.AttributeValue, error) {
-	var e encoder
+	var e codec
 	if err := doc.Encode(&e); err != nil {
 		return nil, err
 	}
 	return e.asV1AttributeValue()
 }
 
-func (e *encoder) asV1AttributeValue() (*dyn.AttributeValue, error) {
+func (e *codec) asV1AttributeValue() (*dyn.AttributeValue, error) {
 	var err error
 	switch e.kind {
 	case reflect.Interface: // flag for null
@@ -153,7 +153,7 @@ func (e *encoder) asV1AttributeValue() (*dyn.AttributeValue, error) {
 			new(dyn.AttributeValue).SetN(strconv.FormatFloat(imag(e.value.(complex128)), 'f', -1, 64)),
 		}), nil
 	case reflect.Slice:
-		es := e.value.([]*encoder)
+		es := e.value.([]*codec)
 		s := make([]*dyn.AttributeValue, len(es))
 		for i, se := range es {
 			s[i], err = se.asV1AttributeValue()
@@ -163,7 +163,7 @@ func (e *encoder) asV1AttributeValue() (*dyn.AttributeValue, error) {
 		}
 		return new(dyn.AttributeValue).SetL(s), nil
 	case reflect.Map:
-		em := e.value.(map[string]*encoder)
+		em := e.value.(map[string]*codec)
 		m := make(map[string]*dyn.AttributeValue, len(em))
 		for k, se := range em {
 			m[k], err = se.asV1AttributeValue()
@@ -177,7 +177,7 @@ func (e *encoder) asV1AttributeValue() (*dyn.AttributeValue, error) {
 	return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "unknown type to encode %s", reflect.TypeOf(e.value).Kind())
 }
 
-func (e *encoder) asV2AttributeValue() (dyn2Types.AttributeValue, error) {
+func (e *codec) asV2AttributeValue() (dyn2Types.AttributeValue, error) {
 	var err error
 	switch e.kind {
 	case reflect.Interface: // flag for null
@@ -200,7 +200,7 @@ func (e *encoder) asV2AttributeValue() (dyn2Types.AttributeValue, error) {
 			&dyn2Types.AttributeValueMemberN{Value: strconv.FormatFloat(imag(e.value.(complex128)), 'f', -1, 64)},
 		}}, nil
 	case reflect.Slice:
-		es := e.value.([]*encoder)
+		es := e.value.([]*codec)
 		s := make([]dyn2Types.AttributeValue, len(es))
 		for i, se := range es {
 			s[i], err = se.asV2AttributeValue()
@@ -210,7 +210,7 @@ func (e *encoder) asV2AttributeValue() (dyn2Types.AttributeValue, error) {
 		}
 		return &dyn2Types.AttributeValueMemberL{Value: s}, nil
 	case reflect.Map:
-		em := e.value.(map[string]*encoder)
+		em := e.value.(map[string]*codec)
 		m := make(map[string]dyn2Types.AttributeValue, len(em))
 		for k, se := range em {
 			m[k], err = se.asV2AttributeValue()
@@ -224,7 +224,7 @@ func (e *encoder) asV2AttributeValue() (dyn2Types.AttributeValue, error) {
 	return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "unknown type to encode %s", reflect.TypeOf(e.value).Kind())
 }
 
-func (e *encoder) asV1AttributeMap() (map[string]*dyn.AttributeValue, error) {
+func (e *codec) asV1AttributeMap() (map[string]*dyn.AttributeValue, error) {
 	if e.kind != reflect.Map {
 		return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "incorrect type to encode %s, not map", reflect.TypeOf(e.value).Kind())
 	}
@@ -235,7 +235,7 @@ func (e *encoder) asV1AttributeMap() (map[string]*dyn.AttributeValue, error) {
 	return av.M, nil
 }
 
-func (e *encoder) asV2AttributeMap() (map[string]dyn2Types.AttributeValue, error) {
+func (e *codec) asV2AttributeMap() (map[string]dyn2Types.AttributeValue, error) {
 	if e.kind != reflect.Map {
 		return nil, gcerr.Newf(gcerr.InvalidArgument, nil, "incorrect type to encode %s, not map", reflect.TypeOf(e.value).Kind())
 	}
@@ -249,8 +249,8 @@ func (e *encoder) asV2AttributeMap() (map[string]dyn2Types.AttributeValue, error
 // Encode the key fields of the given document into a map AttributeValue.
 // pkey and skey are the names of the partition key field and the sort key field.
 // pkey must always be non-empty, but skey may be empty if the collection has no sort key.
-func encodeDocKeyFields(doc driver.Document, pkey, skey string) (map[string]*encoder, error) {
-	m := map[string]*encoder{}
+func encodeDocKeyFields(doc driver.Document, pkey, skey string) (map[string]*codec, error) {
+	m := map[string]*codec{}
 
 	set := func(fieldName string) error {
 		fieldVal, err := doc.GetField(fieldName)
@@ -276,292 +276,195 @@ func encodeDocKeyFields(doc driver.Document, pkey, skey string) (map[string]*enc
 	return m, nil
 }
 
-func encodeValue(v interface{}) (*encoder, error) {
-	var e encoder
+func encodeValue(v interface{}) (*codec, error) {
+	var e codec
 	if err := driver.Encode(reflect.ValueOf(v), &e); err != nil {
 		return nil, err
 	}
 	return &e, nil
 }
 
-////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////
 
 func decodeDoc(item *dyn.AttributeValue, doc driver.Document) error {
-	return doc.Decode(decoder{av1: item})
+	d, err := newV1Decoder(item)
+	if err != nil {
+		return err
+	}
+	return doc.Decode(d)
 }
 func decodeDocV2(item dyn2Types.AttributeValue, doc driver.Document) error {
-	return doc.Decode(decoder{av2: item})
+	d, err := newV2Decoder(item)
+	if err != nil {
+		return err
+	}
+	return doc.Decode(d)
 }
 
-type decoder struct {
-	av1 *dyn.AttributeValue
-	av2 dyn2Types.AttributeValue
+func (d codec) String() string {
+	return fmt.Sprint(d.value)
 }
 
-func (d decoder) String() string {
-	if d.av1 != nil {
-		return d.av1.String()
+func (d codec) AsBool() (bool, bool) {
+	if d.kind != reflect.Bool {
+		return false, false
 	}
-	return fmt.Sprint(d.av2)
+	return d.value.(bool), true
 }
 
-func (d decoder) AsBool() (bool, bool) {
-	if d.av1 != nil {
-		if d.av1.BOOL == nil {
-			return false, false
-		}
-		return *d.av1.BOOL, true
-	}
-	if d.av2 != nil {
-		if b, ok := d.av2.(*dyn2Types.AttributeValueMemberBOOL); ok {
-			return b.Value, true
-		}
-	}
-	return false, false
+func (d codec) AsNull() bool {
+	return d.kind == reflect.Interface
 }
 
-func (d decoder) AsNull() bool {
-	if d.av1 != nil {
-		return d.av1.NULL != nil
+func (d codec) AsString() (string, bool) {
+	if d.kind != reflect.String {
+		return "", false
 	}
-	if d.av2 != nil {
-		if _, ok := d.av2.(*dyn2Types.AttributeValueMemberNULL); ok {
-			return ok
-		}
-	}
-	return false
-}
-
-func (d decoder) AsString() (string, bool) {
 	// Empty string is represented by NULL.
-	if d.av1 != nil {
-		if d.av1.NULL != nil {
-			return "", true
-		}
-		if d.av1.S == nil {
-			return "", false
-		}
-		return *d.av1.S, true
+	if d.value == nil {
+		return "", true
 	}
-	if d.av2 != nil {
-		if _, ok := d.av2.(*dyn2Types.AttributeValueMemberNULL); ok {
-			return "", true
-		}
-		if s, ok := d.av2.(*dyn2Types.AttributeValueMemberS); ok {
-			return s.Value, true
-		}
-	}
-	return "", false
+	return d.value.(string), true
 }
 
-func (d decoder) AsInt() (int64, bool) {
-	if d.av1 != nil {
-		if d.av1.N == nil {
-			return 0, false
+func (d codec) AsInt() (int64, bool) {
+	var v int64
+	switch d.kind {
+	case reflect.Int64:
+		if d.value != nil {
+			v = d.value.(int64)
 		}
-		i, err := strconv.ParseInt(*d.av1.N, 10, 64)
-		if err != nil {
-			return 0, false
+	case reflect.Uint64:
+		if d.value != nil {
+			v = int64(d.value.(uint64))
 		}
-		return i, true
+	default:
+		return 0, false
 	}
-	if d.av2 != nil {
-		if n, ok := d.av2.(*dyn2Types.AttributeValueMemberN); ok {
-			i, err := strconv.ParseInt(n.Value, 10, 64)
-			if err != nil {
-				return 0, false
-			}
-			return i, true
-		}
-	}
-	return 0, false
+	return v, true
 }
 
-func (d decoder) AsUint() (uint64, bool) {
-	if d.av1 != nil {
-		if d.av1.N == nil {
-			return 0, false
+func (d codec) AsUint() (uint64, bool) {
+	var v uint64
+	switch d.kind {
+	case reflect.Int64:
+		if d.value != nil {
+			v = uint64(d.value.(int64))
 		}
-		u, err := strconv.ParseUint(*d.av1.N, 10, 64)
-		if err != nil {
-			return 0, false
+	case reflect.Uint64:
+		if d.value != nil {
+			v = d.value.(uint64)
 		}
-		return u, true
+	default:
+		return 0, false
 	}
-	if d.av2 != nil {
-		if n, ok := d.av2.(*dyn2Types.AttributeValueMemberN); ok {
-			i, err := strconv.ParseUint(n.Value, 10, 64)
-			if err != nil {
-				return 0, false
-			}
-			return i, true
-		}
-	}
-	return 0, false
+	return v, true
 }
 
-func (d decoder) AsFloat() (float64, bool) {
-	if d.av1 != nil {
-		if d.av1.N == nil {
-			return 0, false
+func (d codec) AsFloat() (float64, bool) {
+	var v float64
+	switch d.kind {
+	case reflect.Int64:
+		if d.value != nil {
+			v = float64(d.value.(int64))
 		}
-		f, err := strconv.ParseFloat(*d.av1.N, 64)
-		if err != nil {
-			return 0, false
+	case reflect.Uint64:
+		if d.value != nil {
+			v = float64(d.value.(uint64))
 		}
-		return f, true
+	case reflect.Float64:
+		if d.value != nil {
+			v = d.value.(float64)
+		}
+	default:
+		return 0, false
 	}
-	if d.av2 != nil {
-		if n, ok := d.av2.(*dyn2Types.AttributeValueMemberN); ok {
-			f, err := strconv.ParseFloat(n.Value, 64)
-			if err != nil {
-				return 0, false
-			}
-			return f, true
-		}
-	}
-	return 0, false
+	return v, true
 }
 
-func (d decoder) AsComplex() (complex128, bool) {
-	if d.av1 != nil {
-		if len(d.av1.L) != 2 {
+func (d codec) AsComplex() (complex128, bool) {
+	if d.kind == reflect.Complex128 {
+		return d.value.(complex128), true
+	}
+	if d.kind == reflect.Slice {
+		l := d.value.([]*codec)
+		if len(l) != 2 {
 			return 0, false
 		}
-		r, ok := decoder{av1: d.av1.L[0]}.AsFloat()
+
+		r, ok := l[0].AsFloat()
 		if !ok {
 			return 0, false
 		}
-		i, ok := decoder{av1: d.av1.L[1]}.AsFloat()
+		i, ok := l[1].AsFloat()
 		if !ok {
 			return 0, false
 		}
 		return complex(r, i), true
 	}
-	if d.av2 != nil {
-		if l, ok := d.av2.(*dyn2Types.AttributeValueMemberL); ok {
-			if len(l.Value) != 2 {
-				return 0, false
-			}
-			r, ok := decoder{av2: l.Value[0]}.AsFloat()
-			if !ok {
-				return 0, false
-			}
-			i, ok := decoder{av2: l.Value[1]}.AsFloat()
-			if !ok {
-				return 0, false
-			}
-			return complex(r, i), true
-		}
-	}
+
 	return 0, false
 }
 
-func (d decoder) AsBytes() ([]byte, bool) {
-	if d.av1 != nil {
-		if d.av1.B == nil {
-			return nil, false
-		}
-		return d.av1.B, true
+func (d codec) AsBytes() ([]byte, bool) {
+	if d.kind != reflect.Array {
+		return nil, false
 	}
-	if d.av2 != nil {
-		if b, ok := d.av2.(*dyn2Types.AttributeValueMemberB); ok {
-			return b.Value, true
-		}
-	}
-	return nil, false
+	return d.value.([]byte), true
 }
 
-func (d decoder) ListLen() (int, bool) {
-	if d.av1 != nil {
-		if d.av1.L == nil {
-			return 0, false
-		}
-		return len(d.av1.L), true
+func (d codec) ListLen() (int, bool) {
+	if d.kind != reflect.Slice {
+		return 0, false
 	}
-	if d.av2 != nil {
-		if l, ok := d.av2.(*dyn2Types.AttributeValueMemberL); ok {
-			if l.Value == nil {
-				return 0, false
-			}
-			return len(l.Value), true
-		}
-	}
-	return 0, false
+	return len(d.value.([]*codec)), true
 }
 
-func (d decoder) DecodeList(f func(i int, vd driver.Decoder) bool) {
-	if d.av1 != nil {
-		for i, el := range d.av1.L {
-			if !f(i, decoder{av1: el}) {
-				break
-			}
-		}
+func (d codec) DecodeList(f func(i int, vd driver.Decoder) bool) {
+	if d.kind != reflect.Slice {
+		return
 	}
-	if d.av2 != nil {
-		if l, ok := d.av2.(*dyn2Types.AttributeValueMemberL); ok {
-			for i, el := range l.Value {
-				if !f(i, decoder{av2: el}) {
-					break
-				}
-			}
+
+	s := d.value.([]*codec)
+
+	for i, el := range s {
+		if !f(i, el) {
+			break
 		}
 	}
 }
 
-func (d decoder) MapLen() (int, bool) {
-	if d.av1 != nil {
-		if d.av1.M == nil {
-			return 0, false
-		}
-		return len(d.av1.M), true
+func (d codec) MapLen() (int, bool) {
+	if d.kind != reflect.Map {
+		return 0, false
 	}
-	if d.av2 != nil {
-		if m, ok := d.av2.(*dyn2Types.AttributeValueMemberM); ok {
-			if m.Value == nil {
-				return 0, false
-			}
-			return len(m.Value), true
-		}
-	}
-	return 0, false
+	return len(d.value.(map[string]*codec)), true
 }
 
-func (d decoder) DecodeMap(f func(key string, vd driver.Decoder, exactMatch bool) bool) {
-	if d.av1 != nil {
-		for k, av := range d.av1.M {
-			if !f(k, decoder{av1: av}, true) {
-				break
-			}
-		}
+func (d codec) DecodeMap(f func(key string, vd driver.Decoder, exactMatch bool) bool) {
+	if d.kind != reflect.Map {
+		return
 	}
-	if d.av2 != nil {
-		if m, ok := d.av2.(*dyn2Types.AttributeValueMemberM); ok {
-			for k, av := range m.Value {
-				if !f(k, decoder{av2: av}, true) {
-					break
-				}
-			}
+
+	m := d.value.(map[string]*codec)
+
+	for k, dec := range m {
+		if !f(k, dec, true) {
+			break
 		}
 	}
 }
 
-func (d decoder) AsInterface() (interface{}, error) {
-	if d.av1 != nil {
-		return toGoValue(d.av1)
-	}
-	if d.av2 != nil {
-		return toGoValueV2(d.av2)
-	}
-	return nil, nil
+func (d codec) AsInterface() (interface{}, error) {
+	return d.value, nil
 }
 
-func toGoValue(av *dyn.AttributeValue) (interface{}, error) {
+func newV1Decoder(av *dyn.AttributeValue) (*codec, error) {
 	switch {
 	case av.NULL != nil:
-		return nil, nil
+		return newDecoder(nil, reflect.Interface), nil
 	case av.BOOL != nil:
-		return *av.BOOL, nil
+		return newDecoder(*av.BOOL, reflect.Bool), nil
 	case av.N != nil:
 		f, err := strconv.ParseFloat(*av.N, 64)
 		if err != nil {
@@ -569,74 +472,86 @@ func toGoValue(av *dyn.AttributeValue) (interface{}, error) {
 		}
 		i := int64(f)
 		if float64(i) == f {
-			return i, nil
+			return newDecoder(i, reflect.Int64), nil
 		}
 		u := uint64(f)
 		if float64(u) == f {
-			return u, nil
+			return newDecoder(u, reflect.Uint64), nil
 		}
-		return f, nil
+		return newDecoder(f, reflect.Float64), nil
 
 	case av.B != nil:
-		return av.B, nil
+		return newDecoder(av.B, reflect.Array), nil
 	case av.S != nil:
-		return *av.S, nil
+		t, err := time.Parse(time.RFC3339Nano, *av.S)
+		if err == nil {
+			return newDecoder(t, reflect.Chan), nil
+		}
+		return newDecoder(*av.S, reflect.String), nil
 
 	case av.L != nil:
-		s := make([]interface{}, len(av.L))
+		s := make([]*codec, len(av.L))
 		for i, v := range av.L {
-			x, err := toGoValue(v)
+			x, err := newV1Decoder(v)
 			if err != nil {
 				return nil, err
 			}
 			s[i] = x
 		}
-		return s, nil
+		return newDecoder(s, reflect.Slice), nil
 
 	case av.M != nil:
-		m := make(map[string]interface{}, len(av.M))
+		m := make(map[string]*codec, len(av.M))
 		for k, v := range av.M {
-			x, err := toGoValue(v)
+			x, err := newV1Decoder(v)
 			if err != nil {
 				return nil, err
 			}
 			m[k] = x
 		}
-		return m, nil
+		return newDecoder(m, reflect.Map), nil
+
+	// recognized but unsupported types
+	case av.SS != nil:
+		return newDecoder(av.SS, reflect.Invalid), nil
+	case av.NS != nil:
+		return newDecoder(av.NS, reflect.Invalid), nil
+	case av.BS != nil:
+		return newDecoder(av.BS, reflect.Invalid), nil
 
 	default:
 		return nil, fmt.Errorf("awsdynamodb: AttributeValue %s not supported", av)
 	}
 }
 
-func toGoValueV2(av dyn2Types.AttributeValue) (interface{}, error) {
+func newV2Decoder(av dyn2Types.AttributeValue) (*codec, error) {
 	var err error
 
 	switch t := av.(type) {
 	case *dyn2Types.AttributeValueMemberB:
-		return t.Value, nil
+		return newDecoder(t.Value, reflect.Array), nil
 	case *dyn2Types.AttributeValueMemberBOOL:
-		return t.Value, nil
+		return newDecoder(t.Value, reflect.Bool), nil
 	case *dyn2Types.AttributeValueMemberBS:
-		return t.Value, nil
+		return newDecoder(t.Value, reflect.Invalid), nil
 	case *dyn2Types.AttributeValueMemberL:
-		l := make([]any, len(t.Value))
+		l := make([]*codec, len(t.Value))
 		for i, v := range t.Value {
-			l[i], err = toGoValueV2(v)
+			l[i], err = newV2Decoder(v)
 			if err != nil {
-				return l, err
+				return nil, err
 			}
 		}
-		return l, nil
+		return newDecoder(l, reflect.Slice), nil
 	case *dyn2Types.AttributeValueMemberM:
-		m := make(map[string]any, len(t.Value))
+		m := make(map[string]*codec, len(t.Value))
 		for k, v := range t.Value {
-			m[k], err = toGoValueV2(v)
+			m[k], err = newV2Decoder(v)
 			if err != nil {
-				return m, err
+				return nil, err
 			}
 		}
-		return m, err
+		return newDecoder(m, reflect.Map), err
 	case *dyn2Types.AttributeValueMemberN:
 		f, err := strconv.ParseFloat(t.Value, 64)
 		if err != nil {
@@ -644,78 +559,49 @@ func toGoValueV2(av dyn2Types.AttributeValue) (interface{}, error) {
 		}
 		i := int64(f)
 		if float64(i) == f {
-			return i, nil
+			return newDecoder(i, reflect.Int64), nil
 		}
 		u := uint64(f)
 		if float64(u) == f {
-			return u, nil
+			return newDecoder(u, reflect.Uint64), nil
 		}
-		return f, nil
+		return newDecoder(f, reflect.Float64), nil
 	case *dyn2Types.AttributeValueMemberNS:
-		return t.Value, nil
+		return newDecoder(t.Value, reflect.Invalid), nil
 	case *dyn2Types.AttributeValueMemberNULL:
-		return nil, nil
+		return newDecoder(nil, reflect.Interface), nil
 	case *dyn2Types.AttributeValueMemberS:
-		return t.Value, nil
+		return newDecoder(t.Value, reflect.String), nil
 	case *dyn2Types.AttributeValueMemberSS:
-		return t.Value, nil
+		return newDecoder(t.Value, reflect.Invalid), nil
 
 	default:
 		return nil, fmt.Errorf("awsdynamodb: AttributeValue %s not supported", av)
 	}
 }
 
-func (d decoder) AsSpecial(v reflect.Value) (bool, interface{}, error) {
-	if d.av1 != nil {
-		return d.asV1Special(v)
-	}
-	if d.av2 != nil {
-		return d.asV2Special(v)
-	}
-	return false, nil, nil
-}
-
-func (d decoder) asV1Special(v reflect.Value) (bool, interface{}, error) {
-	unsupportedTypes := `unsupported type, the docstore driver for DynamoDB does
-	not decode DynamoDB set types, such as string set, number set and binary set`
-	if d.av1.SS != nil || d.av1.NS != nil || d.av1.BS != nil {
-		return true, nil, errors.New(unsupportedTypes)
-	}
-	switch v.Type() {
-	case typeOfGoTime:
-		if d.av1.S == nil {
-			return false, nil, errors.New("expected string field for time.Time")
-		}
-		t, err := time.Parse(time.RFC3339Nano, *d.av1.S)
-		return true, t, err
-	}
-	return false, nil, nil
-}
-
-func (d decoder) asV2Special(v reflect.Value) (bool, interface{}, error) {
-	unsupportedTypes := `unsupported type, the docstore driver for DynamoDB does
-	not decode DynamoDB set types, such as string set, number set and binary set`
-	switch d.av2.(type) {
-	case *dyn2Types.AttributeValueMemberSS:
-		return true, nil, errors.New(unsupportedTypes)
-	case *dyn2Types.AttributeValueMemberNS:
-		return true, nil, errors.New(unsupportedTypes)
-	case *dyn2Types.AttributeValueMemberBS:
+func (d codec) AsSpecial(v reflect.Value) (bool, interface{}, error) {
+	if d.kind == reflect.Invalid {
+		unsupportedTypes := `unsupported type, the docstore driver for DynamoDB does
+		not decode DynamoDB set types, such as string set, number set and binary set`
 		return true, nil, errors.New(unsupportedTypes)
 	}
 
 	switch v.Type() {
 	case typeOfGoTime:
-		if _, ok := d.av2.(*dyn2Types.AttributeValueMemberNULL); ok {
-			return false, nil, errors.New("expected string field for time.Time")
+		if d.kind == reflect.Chan {
+			return true, d.value.(time.Time), nil
 		}
-		if s, ok := d.av2.(*dyn2Types.AttributeValueMemberS); ok {
-			t, err := time.Parse(time.RFC3339Nano, s.Value)
-			return true, t, err
-		}
+		return false, nil, errors.New("expected string field for time.Time")
 	}
-
 	return false, nil, nil
+}
+
+func newDecoder(x any, kind reflect.Kind) *codec {
+	return &codec{
+		kind:  kind,
+		value: x,
+	}
 }
 
 func reReferenceMapString(m map[string]*string) map[string]string {

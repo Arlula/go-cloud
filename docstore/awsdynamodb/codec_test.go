@@ -72,7 +72,7 @@ func TestEncodeValue(t *testing.T) {
 			&dyn2Types.AttributeValueMemberM{Value: map[string]dyn2Types.AttributeValue{"a": &dyn2Types.AttributeValueMemberN{Value: "1"}, "b": &dyn2Types.AttributeValueMemberN{Value: "2"}}},
 		},
 	} {
-		var e encoder
+		var e codec
 		if err := driver.Encode(reflect.ValueOf(test.in), &e); err != nil {
 			t.Fatal(err)
 		}
@@ -158,11 +158,15 @@ func TestDecodeValue(t *testing.T) {
 		},
 	} {
 		var (
-			d      = decoder{av1: tc.inV1}
 			target = reflect.New(reflect.TypeOf(tc.out))
 		)
-
-		if err := driver.Decode(target.Elem(), &d); err != nil {
+		d, err := newV1Decoder(tc.inV1)
+		if err != nil {
+			t.Errorf("error constructing codec for value %#v, got error: %#v", tc.inV1, err)
+			continue
+		}
+		if err := driver.Decode(target.Elem(), d); err != nil {
+			t.Log(d.kind)
 			t.Errorf("[V1] error decoding value %#v, got error: %#v", tc.inV1, err)
 			continue
 		}
@@ -171,8 +175,12 @@ func TestDecodeValue(t *testing.T) {
 			t.Errorf("[V1] %#v: got %#v, want %#v", tc.inV1, target.Elem().Interface(), tc.out)
 		}
 
-		d = decoder{av2: tc.inV2}
-		if err := driver.Decode(target.Elem(), &d); err != nil {
+		d, err = newV2Decoder(tc.inV2)
+		if err != nil {
+			t.Errorf("error constructing codec for value %#v, got error: %#v", tc.inV2, err)
+			continue
+		}
+		if err := driver.Decode(target.Elem(), d); err != nil {
 			t.Errorf("[V2] error decoding value %#v, got error: %#v", tc.inV2, err)
 			continue
 		}
@@ -194,8 +202,12 @@ func TestDecodeErrorOnUnsupported(t *testing.T) {
 		{av().SetNS([]*string{sptr("1.1"), sptr("-2.2"), sptr("3.3")}), []float64{}},
 		{av().SetBS([][]byte{{4}, {5}, {6}}), [][]byte{}},
 	} {
-		d := decoder{av1: tc.in}
-		if err := driver.Decode(reflect.ValueOf(tc.out), &d); err == nil {
+		d, err := newV1Decoder(tc.in)
+		if err != nil {
+			t.Errorf("got error constructing codec for invalid type: %#v", err)
+			continue
+		}
+		if err := driver.Decode(reflect.ValueOf(tc.out), d); err == nil {
 			t.Error("got nil error, want unsupported error")
 		}
 	}
